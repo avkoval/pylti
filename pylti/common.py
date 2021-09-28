@@ -174,11 +174,18 @@ def _post_patched_request(consumers, lti_key, body,
 
     http = httplib2.Http
     # pylint: disable=protected-access
-    normalize = http._normalize_headers
+    if not hasattr(http, '_normalize_headers_orig'):
+        # In multi threading environment or with green events
+        # (for example in Celery worker) the function will stop
+        # on blocking client.request, exposing patched http._normalize_headers
+        # to a differnt thread, which ends up with  infinite recursion loop. To avoid this
+        # situation, lets save http._normalize_headers within the module as _orig
+        # and do it once for this interpreteur lifecycle
+        http._normalize_headers_orig = http._normalize_headers
 
     def my_normalize(self, headers):
         """ This function patches Authorization header """
-        ret = normalize(self, headers)
+        ret = http._normalize_headers_orig(self, headers)
         if 'authorization' in ret:
             ret['Authorization'] = ret.pop('authorization')
         log.debug("headers")
@@ -186,7 +193,6 @@ def _post_patched_request(consumers, lti_key, body,
         return ret
 
     http._normalize_headers = my_normalize
-    monkey_patch_function = normalize
     response, content = client.request(
         url,
         method,
@@ -195,7 +201,7 @@ def _post_patched_request(consumers, lti_key, body,
 
     http = httplib2.Http
     # pylint: disable=protected-access
-    http._normalize_headers = monkey_patch_function
+    http._normalize_headers = http._normalize_headers_orig
 
     log.debug("key %s", lti_key)
     log.debug("secret %s", secret)
